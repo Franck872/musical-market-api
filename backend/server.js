@@ -1,4 +1,5 @@
 // server.js
+
 console.log("DATABASE_URL:", process.env.DATABASE_URL ? "OK" : "MANQUANT");
 
 const express = require("express");
@@ -17,26 +18,28 @@ const PORT = process.env.PORT || 3000;
 // ---------------------
 
 if (!process.env.DATABASE_URL) {
-  console.error("DATABASE_URL manquant !");
+  console.error("❌ DATABASE_URL manquant !");
+  process.exit(1); // stop le serveur si pas de DB
 }
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
+  ssl: { rejectUnauthorized: false }
 });
 
+// ---------------------
 // Test connexion DB au démarrage
-pool.connect()
-  .then(client => {
-    console.log("Connexion PostgreSQL OK");
-    client.release();
-  })
-  .catch(err => {
-    console.error("Erreur connexion PostgreSQL:", err);
-  });
+// ---------------------
 
+(async () => {
+  try {
+    const client = await pool.connect();
+    console.log("✅ Connexion PostgreSQL OK");
+    client.release();
+  } catch (err) {
+    console.error("❌ Erreur connexion PostgreSQL:", err);
+  }
+})();
 
 // ---------------------
 // Healthcheck Railway
@@ -46,17 +49,13 @@ app.get("/health", (req, res) => {
   res.status(200).send("OK");
 });
 
-
 // ---------------------
 // Route racine
 // ---------------------
 
 app.get("/", (req, res) => {
-  res.json({
-    message: "API Musical Market active"
-  });
+  res.json({ message: "API Musical Market active" });
 });
-
 
 // ---------------------
 // Test DB
@@ -65,24 +64,19 @@ app.get("/", (req, res) => {
 app.get("/test-db", async (req, res) => {
   try {
     const result = await pool.query("SELECT NOW()");
-    res.json({
-      db_time: result.rows[0]
-    });
+    res.json({ db_time: result.rows[0] });
   } catch (error) {
-    console.error("DB error:", error);
+    console.error("❌ DB error:", error);
     res.status(500).json({ error: "Database error" });
   }
 });
-
 
 // ---------------------
 // Events
 // ---------------------
 
 app.get("/events", async (req, res) => {
-
   try {
-
     const result = await pool.query(`
       SELECT 
         id,
@@ -95,26 +89,17 @@ app.get("/events", async (req, res) => {
       WHERE status = 'open'
       ORDER BY id DESC
     `);
-
     res.json(result.rows);
-
   } catch (error) {
-
-    console.error("Erreur récupération events:", error);
-
-    res.status(500).json({
-      error: "Impossible de récupérer les événements"
-    });
-
+    console.error("❌ Erreur récupération events:", error);
+    res.status(500).json({ error: "Impossible de récupérer les événements" });
   }
-
 });
-
 
 // ---------------------
 // Start server
 // ---------------------
 
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("🚀 Server running on port", PORT);
 });
