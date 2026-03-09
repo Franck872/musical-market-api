@@ -8,6 +8,11 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+// Route healthcheck
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+
 app.get("/", (req, res) => {
   res.send("API Musical Market fonctionne !");
 });
