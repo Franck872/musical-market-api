@@ -1,4 +1,5 @@
 // server.js
+console.log("DATABASE_URL:", process.env.DATABASE_URL ? "OK" : "MANQUANT");
 
 const express = require("express");
 const cors = require("cors");
