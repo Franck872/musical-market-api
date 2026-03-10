@@ -1,0 +1,13 @@
+{
+  "name": "markets-redis-worker",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node marketsRedisWorker.js"
+  },
+  "dependencies": {
+    "pg": "^8.11.1",
+    "ioredis": "^5.3.2",
+    "dotenv": "^16.3.1"
+  }
+}
