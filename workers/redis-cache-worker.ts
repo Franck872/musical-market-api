@@ -4,21 +4,31 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// -------------------------
+// PostgreSQL
+// -------------------------
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 5,
 });
 
+// -------------------------
+// Redis
+// -------------------------
 const redis = new Redis(process.env.REDIS_URL);
 
-const UPDATE_INTERVAL = 60 * 1000;
+// -------------------------
+// Config
+// -------------------------
+const UPDATE_INTERVAL = 60 * 1000; // 1 min
 
+// -------------------------
+// Build JSON des marchés
 // -------------------------
 async function buildMarketsJSON() {
   const client = await pool.connect();
 
   try {
-    // 1️⃣ Query unique avec JOIN
     const res = await client.query(`
       SELECT 
         e.id,
@@ -77,16 +87,17 @@ async function buildMarketsJSON() {
 }
 
 // -------------------------
+// Mise à jour Redis
+// -------------------------
 async function updateRedisCache() {
   try {
     const data = await buildMarketsJSON();
-
     const pipeline = redis.pipeline();
 
     // JSON global
     pipeline.set("markets:active", JSON.stringify(data));
 
-    // index marchés
+    // Index des marchés
     pipeline.set(
       "markets:index",
       JSON.stringify(data.markets.map((m: any) => m.id))
@@ -97,7 +108,7 @@ async function updateRedisCache() {
       pipeline.set(`market:${market.id}`, JSON.stringify(market));
     }
 
-    // push event realtime
+    // Notification Pub/Sub pour WebSocket
     pipeline.publish(
       "markets:update",
       JSON.stringify({
@@ -115,12 +126,15 @@ async function updateRedisCache() {
 }
 
 // -------------------------
-
+// Lancement du worker
+// -------------------------
 async function startWorker() {
   console.log("🟢 Redis cache worker started");
 
+  // première mise à jour immédiate
   await updateRedisCache();
 
+  // mise à jour toutes les minutes
   setInterval(updateRedisCache, UPDATE_INTERVAL);
 }
 
