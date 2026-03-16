@@ -1,151 +1,132 @@
-// server.js
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import http from "http";
 
-console.log("DATABASE_URL:", process.env.DATABASE_URL ? "OK" : "MANQUANT");
+import { redis } from "./redis.js";
+import { buildMarkets } from "./marketBuilder.js";
+import { startWebsocket, broadcast } from "./websocket.js";
 
-const express = require("express");
-const cors = require("cors");
-const { Pool } = require("pg");
-require("dotenv").config();
+import { updateViews, fetchVideos } from "./fetcher.js";
+import { generateEvents } from "./generator.js";
+import { resolveEvents } from "./resolver.js";
+
+dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+
+const server = http.createServer(app);
+
+startWebsocket(server);
 
 const PORT = process.env.PORT || 3000;
 
-// ---------------------
-// PostgreSQL connection
-// ---------------------
+async function updateMarkets() {
 
-if (!process.env.DATABASE_URL) {
-  console.error("❌ DATABASE_URL manquant !");
-  process.exit(1);
+  try {
+
+    const data = await buildMarkets();
+
+    if (!data) {
+      console.log("⚠️ No market data generated");
+      return;
+    }
+
+    const json = JSON.stringify(data);
+
+    await redis.set(
+      "markets:active",
+      json,
+      "EX",
+      30
+    );
+
+    await redis.publish("markets:update", json);
+
+    broadcast(data);
+
+    console.log(`✅ Markets updated (${data.active_events})`);
+
+  } catch (err) {
+
+    console.error("❌ Market update error:", err);
+
+  }
+
 }
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
+/* ---------------------- */
+/* MOTEURS DU BACKEND */
+/* ---------------------- */
 
-// ---------------------
-// Test connexion DB au démarrage
-// ---------------------
+setInterval(updateMarkets, 15000);      // API cache
+setInterval(updateViews, 60000);        // fetcher vues
+setInterval(resolveEvents, 60000);      // calcul marchés
+setInterval(generateEvents, 600000);    // créer événements
 
-(async () => {
-  try {
-    const client = await pool.connect();
-    console.log("✅ Connexion PostgreSQL OK");
-    client.release();
-  } catch (err) {
-    console.error("❌ Erreur connexion PostgreSQL:", err);
-  }
-})();
+// recherche YouTube une fois par jour
+setInterval(fetchVideos, 86400000);
 
-// ---------------------
-// Healthcheck
-// ---------------------
+/* lancement immédiat */
 
-app.get("/health", (req, res) => res.status(200).send("OK"));
+updateMarkets();
+updateViews();
+resolveEvents();
+generateEvents();
 
-// ---------------------
-// Route racine
-// ---------------------
+/* ---------------------- */
+/* ROUTES API */
+/* ---------------------- */
 
 app.get("/", (req, res) => {
-  res.json({ message: "API Musical Market active" });
+
+  res.json({
+    service: "Musical Market API",
+    status: "running",
+    endpoint: "/api/markets"
+  });
+
 });
 
-// ---------------------
-// Test DB
-// ---------------------
+app.get("/api/markets", async (req, res) => {
 
-app.get("/test-db", async (req, res) => {
   try {
-    const result = await pool.query("SELECT NOW()");
-    res.json({ db_time: result.rows[0] });
-  } catch (error) {
-    console.error("❌ DB error:", error);
-    res.status(500).json({ error: "Database error" });
-  }
-});
 
-// ---------------------
-// Events
-// ---------------------
+    const data = await redis.get("markets:active");
 
-app.get("/events", async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT id, artiste, titre, type, status, offres
-      FROM events
-      WHERE status = 'open'
-      ORDER BY id DESC
-    `);
-    res.json(result.rows);
-  } catch (error) {
-    console.error("❌ Erreur récupération events:", error);
-    res.status(500).json({ error: "Impossible de récupérer les événements" });
-  }
-});
+    if (!data) {
 
-// ---------------------
-// Init dummy events (pour tester front)
-// ---------------------
-
-app.post("/init-events", async (req, res) => {
-  try {
-    const sampleEvents = [];
-    for (let i = 1; i <= 5; i++) {
-      const target = 1000000 + i * 1000;
-      sampleEvents.push({
-        artiste: `Artiste ${i}`,
-        titre: `Titre ${i}`,
-        type: "stream solo",
-        status: "open",
-        offres: [
-          { label: "-N", cote: 2.0 },
-          { label: "interval", cote: 2.5 },
-          { label: "+N", cote: 3.0 }
-        ],
-        targetViews: target,
-        intervalUpper: target * 1.01,
-        deadline: new Date(Date.now() + 3600 * 1000).toISOString(),
-        expectedSpeed: 5000,
-        startTime: new Date().toISOString()
+      return res.json({
+        timestamp: Date.now(),
+        active_count: 0,
+        events: []
       });
+
     }
 
-    // Insérer dans PostgreSQL (table `events`) si nécessaire
-    for (const e of sampleEvents) {
-      await pool.query(
-        `INSERT INTO events (artiste, titre, type, status, offres, targetviews, intervalupper, deadline, expectedspeed, starttime)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [
-          e.artiste,
-          e.titre,
-          e.type,
-          e.status,
-          JSON.stringify(e.offres),
-          e.targetViews,
-          e.intervalUpper,
-          e.deadline,
-          e.expectedSpeed,
-          e.startTime
-        ]
-      );
-    }
+    const parsed = JSON.parse(data);
 
-    res.json({ message: "✅ 5 événements initiaux créés", events: sampleEvents });
+    res.json({
+      timestamp: parsed.timestamp,
+      active_count: parsed.active_events,
+      events: parsed.markets
+    });
+
   } catch (err) {
-    console.error("❌ Erreur init-events:", err);
-    res.status(500).json({ error: "Impossible de créer les événements" });
+
+    console.error("❌ Markets route error:", err);
+
+    res.status(500).json({
+      error: "markets_fetch_failed"
+    });
+
   }
+
 });
 
-// ---------------------
-// Start server
-// ---------------------
+server.listen(PORT, () => {
 
-app.listen(PORT, () => {
-  console.log("🚀 Server running on port", PORT);
+  console.log(`🚀 Backend running on port ${PORT}`);
+
 });
